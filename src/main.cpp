@@ -1,6 +1,5 @@
-// ESP32 / ESP32-S3 + ThingsBoard 0.15.0
-// Server-side RPC com API Server_Side_RPC: setState / getState
-// LED controlado pelo dashboard (Switch)
+// ESP32 ThingsBoard - Controle de LED via Dashboard
+// Versão simplificada com RPC setState/getState
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -8,164 +7,171 @@
 #include <Arduino_MQTT_Client.h>
 #include <Server_Side_RPC.h>
 
-// ======== Configurações ========
-constexpr char WIFI_SSID[] = "CURTOCIRCUITO";
-constexpr char WIFI_PASSWORD[] = "Curto@1020";
-constexpr char TOKEN[] = "cJDdWN8GNKSHOAVGLG1K";
-constexpr char THINGSBOARD_SERVER[] = "demo.thingsboard.io";
-constexpr uint16_t THINGSBOARD_PORT = 1883;
+// ===== CONFIGURAÇÕES =====
+const char *WIFI_SSID = "CURTOCIRCUITO";
+const char *WIFI_PASSWORD = "Curto@1020";
+const char *TB_TOKEN = "cJDdWN8GNKSHOAVGLG1K";
+const char *TB_SERVER = "demo.thingsboard.io";
+const int TB_PORT = 1883;
+const int LED_PIN = 2;
 
-// Buffers MQTT (aumente se precisar de payloads maiores)
-constexpr uint16_t MAX_MESSAGE_SEND_SIZE = 256;
-constexpr uint16_t MAX_MESSAGE_RECEIVE_SIZE = 256;
+// ===== VARIÁVEIS GLOBAIS =====
+bool ledState = false;
+unsigned long lastTelemetry = 0;
+const unsigned long TELEMETRY_INTERVAL = 5000; // 5 segundos
 
-// LED onboard: em muitos ESP32 é GPIO 2.
-// Em ESP32-S3, às vezes é 48. Se o LED não acender, troque aqui.
-constexpr int LED_PIN = 2;
-
-// ======== Estado ========
-bool deviceState = false;
-
-// ======== Stack ThingsBoard ========
-WiFiClient net;
-Arduino_MQTT_Client mqttClient(net);
-
-// API Server-side RPC (igual ao exemplo)
-constexpr uint8_t MAX_RPC_SUBSCRIPTIONS = 3U;
-constexpr uint8_t MAX_RPC_RESPONSE = 6U;
-Server_Side_RPC<MAX_RPC_SUBSCRIPTIONS, MAX_RPC_RESPONSE> rpc;
+// ===== INICIALIZAÇÃO THINGSBOARD =====
+WiFiClient wifiClient;
+Arduino_MQTT_Client mqttClient(wifiClient);
+Server_Side_RPC<2, 8> rpc;
 IAPI_Implementation *apis[] = {&rpc};
+ThingsBoard tb(mqttClient, 256, 256, Default_Max_Stack_Size, apis + 0U, apis + 1U);
 
-// Instância ThingsBoard com buffers e APIs
-ThingsBoard tb(mqttClient,
-               MAX_MESSAGE_RECEIVE_SIZE,
-               MAX_MESSAGE_SEND_SIZE,
-               Default_Max_Stack_Size,
-               apis + 0U, apis + 1U);
+// ===== FUNÇÕES =====
 
-bool subscribed = false;
-
-// ======== Wi-Fi ========
-void InitWiFi()
+// Conectar WiFi
+void conectarWiFi()
 {
-  Serial.print("Conectando ao WiFi");
+  Serial.print("Conectando WiFi");
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   while (WiFi.status() != WL_CONNECTED)
   {
-    delay(400);
+    delay(500);
     Serial.print(".");
   }
-  Serial.println("\nWiFi conectado!");
+  Serial.println("\n✅ WiFi conectado!");
 }
 
-bool reconnect()
+// Conectar ThingsBoard
+bool conectarThingsBoard()
 {
-  if (WiFi.status() == WL_CONNECTED)
+  if (tb.connected())
     return true;
-  InitWiFi();
-  return true;
-}
 
-// ======== RPC handlers ========
-// setState: params pode vir {"enabled":true} ou bool direto
-void processSetState(const JsonVariantConst &data, JsonDocument &response)
-{
-  Serial.println("RPC setState recebido");
-
-  bool newState = false;
-  if (data.is<bool>())
+  Serial.println("🔗 Conectando ThingsBoard...");
+  if (tb.connect(TB_SERVER, TB_TOKEN, TB_PORT))
   {
-    newState = data.as<bool>();
-  }
-  else if (data.containsKey("enabled"))
-  {
-    newState = data["enabled"].as<bool>();
+    Serial.println("✅ ThingsBoard conectado!");
+    return true;
   }
 
-  deviceState = newState;
-  digitalWrite(LED_PIN, deviceState ? HIGH : LOW);
-
-  response["state"] = deviceState;
-  response["enabled"] = deviceState;
+  Serial.println("❌ Falha conexão ThingsBoard");
+  return false;
 }
 
-// getState: retorna estado atual
-void processGetState(const JsonVariantConst &data, JsonDocument &response)
+// RPC: Controlar LED
+void onSetState(const JsonVariantConst &data, JsonDocument &response)
 {
-  Serial.println("RPC getState recebido");
-  response["state"] = deviceState;
-  response["enabled"] = deviceState;
+  Serial.println("📞 RPC setState recebido");
+
+  // Aceita tanto boolean direto quanto {"enabled": true}
+  bool novoEstado = data.is<bool>() ? data.as<bool>() : data["enabled"];
+
+  ledState = novoEstado;
+  digitalWrite(LED_PIN, ledState ? HIGH : LOW);
+
+  response["state"] = ledState;
+  response["success"] = true;
+
+  Serial.printf("💡 LED %s\n", ledState ? "LIGADO" : "DESLIGADO");
 }
 
+// RPC: Obter estado do LED
+void onGetState(const JsonVariantConst &data, JsonDocument &response)
+{
+  Serial.println("📞 RPC getState recebido");
+  response["state"] = ledState;
+  response["enabled"] = ledState;
+}
+
+// Enviar telemetria
+void enviarTelemetria()
+{
+  if (millis() - lastTelemetry < TELEMETRY_INTERVAL)
+    return;
+  lastTelemetry = millis();
+
+  // Simular sensores
+  float temperatura = random(200, 300) / 10.0f; // 20.0-29.9°C
+  float umidade = random(400, 800) / 10.0f;     // 40.0-79.9%
+
+  // Enviar cada telemetria separadamente usando sendTelemetryData
+  tb.sendTelemetryData("temperature", temperatura);
+  tb.sendTelemetryData("humidity", umidade);
+  tb.sendTelemetryData("getState", ledState);
+
+  Serial.printf("📊 Temp: %.1f°C | Umidade: %.1f%% | LED: %s\n",
+                temperatura, umidade, ledState ? "ON" : "OFF");
+}
+
+// Configurar RPCs
+bool configurarRPCs()
+{
+  static bool rpcConfigurado = false;
+  if (rpcConfigurado)
+    return true;
+
+  Serial.println("🔧 Configurando RPCs...");
+
+  const RPC_Callback callbacks[] = {
+      {"setState", onSetState},
+      {"getState", onGetState}};
+
+  if (rpc.RPC_Subscribe(callbacks + 0U, callbacks + 2U))
+  {
+    Serial.println("✅ RPCs configurados: setState, getState");
+    rpcConfigurado = true;
+    return true;
+  }
+
+  Serial.println("❌ Falha ao configurar RPCs");
+  return false;
+}
+
+// ===== SETUP =====
 void setup()
 {
   Serial.begin(115200);
+  Serial.println("🚀 ESP32 ThingsBoard iniciando...");
+
+  // Configurar LED
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
 
-  InitWiFi();
+  // Conectar WiFi
+  conectarWiFi();
+
+  Serial.println("✅ Setup concluído!");
 }
 
+// ===== LOOP PRINCIPAL =====
 void loop()
 {
-  // Mantenha Wi-Fi
-  if (!reconnect())
+  // Manter conexões ativas
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    conectarWiFi();
     return;
-
-  // Conecta TB se necessário
-  if (!tb.connected())
-  {
-    Serial.printf("Conectando ao ThingsBoard (%s) com token...\n", THINGSBOARD_SERVER);
-    if (!tb.connect(THINGSBOARD_SERVER, TOKEN, THINGSBOARD_PORT))
-    {
-      Serial.println("Falha ao conectar no TB, tentando depois...");
-      delay(2000);
-      return;
-    }
-    Serial.println("Conectado ao ThingsBoard!");
   }
 
-  // Assina RPCs uma única vez
-  if (!subscribed)
+  if (!conectarThingsBoard())
   {
-    Serial.println("Assinando RPCs...");
-    const RPC_Callback callbacks[MAX_RPC_SUBSCRIPTIONS] = {
-        {"setState", processSetState},
-        {"getState", processGetState}
-        // você pode adicionar mais aqui
-    };
-    if (!rpc.RPC_Subscribe(callbacks + 0U, callbacks + 2U))
-    {
-      Serial.println("Falha ao assinar RPCs");
-      delay(1000);
-      return;
-    }
-    Serial.println("RPCs assinados");
-    subscribed = true;
+    delay(2000);
+    return;
   }
 
-  // Processa MQTT/RPC
+  // Configurar RPCs
+  if (!configurarRPCs())
+  {
+    delay(1000);
+    return;
+  }
+
+  // Processar mensagens MQTT/RPC
   tb.loop();
 
-  // Telemetria de exemplo (2 casas) a cada 5s
-  static uint32_t lastSend = 0;
-  if (millis() - lastSend >= 5000)
-  {
-    lastSend = millis();
+  // Enviar telemetria
+  enviarTelemetria();
 
-    float temp = random(200, 310) / 10.0f;           // 20.0–30.9
-    float hum = 60.0f + (random(-200, 200) / 10.0f); // ~40.0–79.9
-
-    // Criar StaticJsonDocument para telemetria
-    StaticJsonDocument<200> telemetryDoc;
-    telemetryDoc["temperature"] = temp;
-    telemetryDoc["humidity"] = hum;
-    telemetryDoc["state"] = deviceState; // Incluir estado do LED na telemetria
-
-    // Enviar telemetria com JsonDocument
-    tb.sendTelemetryJson(telemetryDoc, measureJson(telemetryDoc));
-
-    Serial.printf("TX -> temp=%.2f, hum=%.2f, led=%s\n",
-                  temp, hum, deviceState ? "ON" : "OFF");
-  }
+  delay(100); // Pequena pausa para não sobrecarregar
 }
