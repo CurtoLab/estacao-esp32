@@ -1,167 +1,171 @@
+// ESP32 / ESP32-S3 + ThingsBoard 0.15.0
+// Server-side RPC com API Server_Side_RPC: setState / getState
+// LED controlado pelo dashboard (Switch)
+
 #include <Arduino.h>
 #include <WiFi.h>
-#include <PubSubClient.h>
+#include <ThingsBoard.h>
+#include <Arduino_MQTT_Client.h>
+#include <Server_Side_RPC.h>
 
-// Configurações
-const char *wifi_ssid = "CURTOCIRCUITO";
-const char *wifi_password = "Curto@1020";
-const char *token = "cJDdWN8GNKSHOAVGLG1K";
-const char *thingsboard_server = "demo.thingsboard.io";
-const int thingsboard_port = 1883;
+// ======== Configurações ========
+constexpr char WIFI_SSID[] = "CURTOCIRCUITO";
+constexpr char WIFI_PASSWORD[] = "Curto@1020";
+constexpr char TOKEN[] = "cJDdWN8GNKSHOAVGLG1K";
+constexpr char THINGSBOARD_SERVER[] = "demo.thingsboard.io";
+constexpr uint16_t THINGSBOARD_PORT = 1883;
 
-WiFiClient wifiClient;
-PubSubClient client(wifiClient);
+// Buffers MQTT (aumente se precisar de payloads maiores)
+constexpr uint16_t MAX_MESSAGE_SEND_SIZE = 256;
+constexpr uint16_t MAX_MESSAGE_RECEIVE_SIZE = 256;
 
-// Estado do dispositivo
+// LED onboard: em muitos ESP32 é GPIO 2.
+// Em ESP32-S3, às vezes é 48. Se o LED não acender, troque aqui.
+constexpr int LED_PIN = 2;
+
+// ======== Estado ========
 bool deviceState = false;
-const int LED_PIN = 2;
 
-// --- RPC (API 0.15.x usa RPC_Request / RPC_Request_Callback) ---
-// Callback para mensagens MQTT recebidas
-void callback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("📞 Mensagem recebida no tópico: ");
-  Serial.println(topic);
-  
-  // Converter payload para string
-  String message = "";
-  for (int i = 0; i < length; i++) {
-    message += (char)payload[i];
-  }
-  
-  Serial.println("� Payload: " + message);
-  
-  // Verificar se é um RPC
-  String topicStr = String(topic);
-  if (topicStr.startsWith("v1/devices/me/rpc/request/")) {
-    // Extrair ID da requisição
-    int lastSlash = topicStr.lastIndexOf('/');
-    String requestId = topicStr.substring(lastSlash + 1);
-    
-    Serial.println("🔧 RPC Request ID: " + requestId);
-    
-    // Parse do JSON simples para extrair o método
-    if (message.indexOf("\"setState\"") >= 0) {
-      // Extrair valor do parâmetro
-      bool newState = false;
-      if (message.indexOf("true") >= 0) {
-        newState = true;
-      }
-      
-      deviceState = newState;
-      digitalWrite(LED_PIN, deviceState ? HIGH : LOW);
-      
-      Serial.println("💡 LED alterado para: " + String(deviceState ? "ON" : "OFF"));
-      
-      // Responder ao RPC
-      String responseTopic = "v1/devices/me/rpc/response/" + requestId;
-      String response = String(deviceState ? "true" : "false");
-      
-      client.publish(responseTopic.c_str(), response.c_str());
-      Serial.println("� Resposta enviada: " + response);
-      
-    } else if (message.indexOf("\"getState\"") >= 0) {
-      Serial.println("📊 Estado atual: " + String(deviceState ? "ON" : "OFF"));
-      
-      // Responder com estado atual
-      String responseTopic = "v1/devices/me/rpc/response/" + requestId;
-      String response = String(deviceState ? "true" : "false");
-      
-      client.publish(responseTopic.c_str(), response.c_str());
-      Serial.println("📤 Resposta enviada: " + response);
-    }
-  }
-}
+// ======== Stack ThingsBoard ========
+WiFiClient net;
+Arduino_MQTT_Client mqttClient(net);
 
-void setup() {
-  Serial.begin(115200);
-  delay(1000);
-  
-  // Configurar LED
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
-  
-  Serial.println("🚀 Iniciando ESP32-S3...");
-  
-  // Conectar WiFi
-  WiFi.begin(wifi_ssid, wifi_password);
-  Serial.print("📶 Conectando WiFi");
-  
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
+// API Server-side RPC (igual ao exemplo)
+constexpr uint8_t MAX_RPC_SUBSCRIPTIONS = 3U;
+constexpr uint8_t MAX_RPC_RESPONSE = 6U;
+Server_Side_RPC<MAX_RPC_SUBSCRIPTIONS, MAX_RPC_RESPONSE> rpc;
+IAPI_Implementation *apis[] = {&rpc};
+
+// Instância ThingsBoard com buffers e APIs
+ThingsBoard tb(mqttClient,
+               MAX_MESSAGE_RECEIVE_SIZE,
+               MAX_MESSAGE_SEND_SIZE,
+               Default_Max_Stack_Size,
+               apis + 0U, apis + 1U);
+
+bool subscribed = false;
+
+// ======== Wi-Fi ========
+void InitWiFi()
+{
+  Serial.print("Conectando ao WiFi");
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(400);
     Serial.print(".");
   }
-  
-  Serial.println();
-  Serial.println("✅ WiFi conectado!");
-  Serial.println("📍 IP: " + WiFi.localIP().toString());
-  
-  // Configurar MQTT
-  client.setServer(thingsboard_server, thingsboard_port);
-  client.setCallback(callback);
-  
-  Serial.println("🔧 Cliente MQTT configurado!");
+  Serial.println("\nWiFi conectado!");
 }
 
-void connectToThingsBoard() {
-  while (!client.connected()) {
-    Serial.println("🔌 Conectando ao ThingsBoard...");
-    
-    if (client.connect("ESP32Device", token, "")) {
-      Serial.println("✅ Conectado ao ThingsBoard!");
-      
-      // Subscrever aos RPCs
-      client.subscribe("v1/devices/me/rpc/request/+");
-      Serial.println("📡 Subscrito aos RPCs!");
-      
-    } else {
-      Serial.print("❌ Falha na conexão, rc=");
-      Serial.print(client.state());
-      Serial.println(" tentando novamente em 5s...");
-      delay(5000);
-    }
-  }
+bool reconnect()
+{
+  if (WiFi.status() == WL_CONNECTED)
+    return true;
+  InitWiFi();
+  return true;
 }
 
-void loop() {
-  // Verificar conexão WiFi
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("📶 Reconectando WiFi...");
-    WiFi.begin(wifi_ssid, wifi_password);
-    while (WiFi.status() != WL_CONNECTED) {
-      delay(500);
-      Serial.print(".");
+// ======== RPC handlers ========
+// setState: params pode vir {"enabled":true} ou bool direto
+void processSetState(const JsonVariantConst &data, JsonDocument &response)
+{
+  Serial.println("RPC setState recebido");
+
+  bool newState = false;
+  if (data.is<bool>())
+  {
+    newState = data.as<bool>();
+  }
+  else if (data.containsKey("enabled"))
+  {
+    newState = data["enabled"].as<bool>();
+  }
+
+  deviceState = newState;
+  digitalWrite(LED_PIN, deviceState ? HIGH : LOW);
+
+  response["state"] = deviceState;
+  response["enabled"] = deviceState;
+}
+
+// getState: retorna estado atual
+void processGetState(const JsonVariantConst &data, JsonDocument &response)
+{
+  Serial.println("RPC getState recebido");
+  response["state"] = deviceState;
+  response["enabled"] = deviceState;
+}
+
+void setup()
+{
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+
+  InitWiFi();
+}
+
+void loop()
+{
+  // Mantenha Wi-Fi
+  if (!reconnect())
+    return;
+
+  // Conecta TB se necessário
+  if (!tb.connected())
+  {
+    Serial.printf("Conectando ao ThingsBoard (%s) com token...\n", THINGSBOARD_SERVER);
+    if (!tb.connect(THINGSBOARD_SERVER, TOKEN, THINGSBOARD_PORT))
+    {
+      Serial.println("Falha ao conectar no TB, tentando depois...");
+      delay(2000);
+      return;
     }
-    Serial.println("\n✅ WiFi reconectado!");
+    Serial.println("Conectado ao ThingsBoard!");
   }
-  
-  // Conectar ao ThingsBoard se necessário
-  if (!client.connected()) {
-    connectToThingsBoard();
-  }
-  
-  // Processar mensagens MQTT
-  client.loop();
-  
-  // Enviar telemetria a cada 10 segundos
-  static unsigned long lastTelemetry = 0;
-  if (millis() - lastTelemetry > 10000) {
-    // Dados de exemplo
-    float temperature = 25.5 + random(-50, 50) / 10.0;
-    float humidity = 60.0 + random(-200, 200) / 10.0;
-    
-    // Criar JSON de telemetria
-    String telemetry = "{\"temperature\":" + String(temperature) + 
-                      ",\"humidity\":" + String(humidity) + 
-                      ",\"ledState\":" + String(deviceState ? "true" : "false") + "}";
-    
-    if (client.publish("v1/devices/me/telemetry", telemetry.c_str())) {
-      Serial.println("📊 Telemetria enviada: " + telemetry);
-    } else {
-      Serial.println("❌ Erro ao enviar telemetria");
+
+  // Assina RPCs uma única vez
+  if (!subscribed)
+  {
+    Serial.println("Assinando RPCs...");
+    const RPC_Callback callbacks[MAX_RPC_SUBSCRIPTIONS] = {
+        {"setState", processSetState},
+        {"getState", processGetState}
+        // você pode adicionar mais aqui
+    };
+    if (!rpc.RPC_Subscribe(callbacks + 0U, callbacks + 2U))
+    {
+      Serial.println("Falha ao assinar RPCs");
+      delay(1000);
+      return;
     }
-    
-    lastTelemetry = millis();
+    Serial.println("RPCs assinados");
+    subscribed = true;
   }
-  
-  delay(100);
+
+  // Processa MQTT/RPC
+  tb.loop();
+
+  // Telemetria de exemplo (2 casas) a cada 5s
+  static uint32_t lastSend = 0;
+  if (millis() - lastSend >= 5000)
+  {
+    lastSend = millis();
+
+    float temp = random(200, 310) / 10.0f;           // 20.0–30.9
+    float hum = 60.0f + (random(-200, 200) / 10.0f); // ~40.0–79.9
+
+    // Criar StaticJsonDocument para telemetria
+    StaticJsonDocument<200> telemetryDoc;
+    telemetryDoc["temperature"] = temp;
+    telemetryDoc["humidity"] = hum;
+    telemetryDoc["state"] = deviceState; // Incluir estado do LED na telemetria
+
+    // Enviar telemetria com JsonDocument
+    tb.sendTelemetryJson(telemetryDoc, measureJson(telemetryDoc));
+
+    Serial.printf("TX -> temp=%.2f, hum=%.2f, led=%s\n",
+                  temp, hum, deviceState ? "ON" : "OFF");
+  }
 }
