@@ -1,4 +1,70 @@
-# ESP32 ThingsBoard Temperature Monitor
+# ESP32 ThingsBoard - EasyThingsBoard Library
+
+Biblioteca simplificada para conectar ESP32 ao ThingsBoard com callbacks reais.
+
+## 📁 Estrutura do Projeto
+
+```
+Esp32-Temp/
+├── src/
+│   └── main.cpp                 # Código principal (exemplo)
+├── lib/
+│   └── EasyThingsBoard/
+│       ├── EasyThingsBoard.h    # Interface da biblioteca
+│       ├── EasyThingsBoard.cpp  # Implementação
+│       └── docs/                # Documentação e exemplos
+├── platformio.ini              # Configuração do projeto
+└── README.md                   # Este arquivo
+```
+
+## 🚀 Uso Básico
+
+```cpp
+#include <EasyThingsBoard.h>
+
+EasyThingsBoard tb;
+
+void setup() {
+    // Conectar (1 linha!)
+    tb.connect("WIFI_SSID", "PASSWORD", "TB_TOKEN");
+    
+    // LED automático com setState/getState
+    tb.setupLED(2);
+}
+
+void loop() {
+    tb.loop();  // Faz tudo automaticamente!
+}
+```
+
+## 📋 Funcionalidades
+
+- ✅ Conexão WiFi automática
+- ✅ Conexão ThingsBoard automática
+- ✅ Callbacks RPC reais (setState/getState automáticos)
+- ✅ Callbacks customizados
+- ✅ Telemetria automática
+- ✅ Reconexão automática
+- ✅ Monitoramento de sistema
+
+## 🔧 Instalação
+
+1. Clone este repositório
+2. Abra no PlatformIO
+3. Compile e faça upload
+
+## 📖 Documentação
+
+Veja a pasta `lib/EasyThingsBoard/docs/` para:
+- Exemplos detalhados
+- Comparação com código original
+- API completa
+
+## 🎯 Redução de Código
+
+- **Antes:** 178 linhas de código complexo
+- **Depois:** ~20 linhas simples
+- **Mesma funcionalidade!**
 
 Este projeto conecta um ESP32 ao ThingsBoard para monitoramento de temperatura e umidade.
 
