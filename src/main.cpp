@@ -15,67 +15,43 @@ const int LED_PIN = 2;
 // ===== BIBLIOTECA =====
 EasyThingsBoard tb;
 
-// ===== CALLBACKS CUSTOMIZADOS =====
+// ===== VARIÁVEIS PARA ARMAZENAR DADOS =====
+int velocidadeSalva = 0;  // Velocidade atual (0-100%)
 
-// Callback para reiniciar ESP32
-void onReset(const JsonVariantConst &data, JsonDocument &response) {
-    Serial.println("🔄 RPC: Reiniciando ESP32...");
-    response["message"] = "ESP32 será reiniciado";
-    response["success"] = true;
+// Callback para configurar velocidade
+void onSetVelocidade(const JsonVariantConst &data, JsonDocument &response) {
+    Serial.println("⚡ RPC: Configurando velocidade..."); 
+    int novaVelocidade = data.as<int>();
     
-    delay(1000);
-    ESP.restart();
+    if (novaVelocidade >= 0 && novaVelocidade <= 100) {
+        velocidadeSalva = novaVelocidade;
+        Serial.printf("Velocidade configurada: %d%% \n", velocidadeSalva);
+    }
 }
 
-// Callback para obter status do sistema
-void onStatus(const JsonVariantConst &data, JsonDocument &response) {
-    Serial.println("📊 RPC: Status do sistema");
-    
-    response["uptime"] = millis() / 1000;
-    response["freeHeap"] = ESP.getFreeHeap();
-    response["wifiStrength"] = tb.getWiFiStrength();
-    response["localIP"] = tb.getLocalIP();
-    response["success"] = true;
+// Callback para consultar velocidade atual
+void onGetVelocidade(const JsonVariantConst &data, JsonDocument &response) {
+    Serial.println("RPC: Consultando velocidade atual...");
+    Serial.printf("Velocidade atual: %d%\n", velocidadeSalva);
 }
 
 void setup() {
     Serial.begin(115200);
-    Serial.println("🚀 EasyThingsBoard - Super Simples!");
+    Serial.println("EasyThingsBoard - Super Simples!");
     
-    // ===== CONECTAR (1 linha!) =====
+    // ===== CONECTAR =====
     tb.connect(WIFI_SSID, WIFI_PASSWORD, TB_TOKEN, TB_SERVER, TB_PORT);
-    
-    // ===== CONFIGURAR LED (1 linha!) =====
     tb.setupLED(LED_PIN);  // Já adiciona setState/getState automaticamente!
     
-    // ===== ADICIONAR CALLBACKS CUSTOMIZADOS =====
-    tb.addRPC("reset", onReset);
-    tb.addRPC("status", onStatus);
-    
-    // OU registrar múltiplos de uma vez (igual ao main original):
-    /*
-    const RPC_Callback callbacks[] = {
-        {"reset", onReset},
-        {"status", onStatus}
-    };
-    tb.registerRPCs(callbacks, 2);
-    */
-    
-    // ===== CONFIGURAR TELEMETRIA =====
-    tb.setTelemetryInterval(3000);  // 3 segundos
-    // tb.enableAutoTelemetry(true);  // Habilitar se quiser telemetria automática
-    
+    // ===== CONFIGURAR CALLBACKS CUSTOMIZADOS =====
+    tb.addRPC("setVelocidade", onSetVelocidade);  // ← RPC para configurar velocidade
+    tb.addRPC("getVelocidade", onGetVelocidade);  // ← RPC para consultar velocidade
     Serial.println("✅ Sistema pronto!");
-    Serial.println("📋 RPCs disponíveis:");
-    Serial.println("   • setState - Liga/desliga LED");
-    Serial.println("   • getState - Estado do LED"); 
-    Serial.println("   • reset - Reinicia ESP32");
-    Serial.println("   • status - Status do sistema");
 }
 
 void loop() {
     tb.loop();  
     tb.sendTelemetry("temperatura", 25.5f);  // 'f' especifica float
-    tb.sendTelemetry("meuSensor", 123);
+    tb.sendTelemetry("velocidade", velocidadeSalva);  // ← Envia velocidade atual
     delay(3000);
 }
